@@ -1,7 +1,7 @@
 import json
 import re
 import urllib.parse
-from datetime import datetime, timezone
+from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 
@@ -141,7 +141,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         approved = data.get("humanApproved")
         action = data.get("action")
 
-        if prov not in ("trusted", "untrusted") or not isinstance(approved, bool) or not isinstance(action, dict):
+        if prov not in ("trusted", "untrusted") or type(approved) is not bool or not isinstance(action, dict):
             return self.send_json(200, {"decision": "block", "reason": "INVALID_SCHEMA"})
 
         tool = action.get("tool")
@@ -152,7 +152,7 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         allowed_tools = ("search", "lookup_record", "send_email", "render_html")
 
-        # 1 & 2 & 3: Tool allowlist and argument schema check
+        # Tool allowlist check
         if tool not in allowed_tools:
             return self.send_json(200, {"decision": "block", "reason": "TOOL_NOT_ALLOWED"})
 
@@ -174,24 +174,24 @@ class RequestHandler(BaseHTTPRequestHandler):
             if set(args.keys()) != {"html"} or not isinstance(args.get("html"), str):
                 return self.send_json(200, {"decision": "block", "reason": "INVALID_SCHEMA"})
 
-        # 4. TENANT_SCOPE
+        # TENANT_SCOPE
         if tool == "lookup_record":
             if args.get("tenantId") != ASSIGNED_TENANT:
                 return self.send_json(200, {"decision": "block", "reason": "TENANT_SCOPE"})
 
-        # 5. EGRESS_DENIED
+        # EGRESS_DENIED
         if tool == "send_email":
             to_addr = args.get("to", "")
             domain = to_addr.split("@")[-1] if "@" in to_addr else ""
             if domain != ASSIGNED_EMAIL_DOMAIN:
                 return self.send_json(200, {"decision": "block", "reason": "EGRESS_DENIED"})
 
-        # 6. APPROVAL_REQUIRED
+        # APPROVAL_REQUIRED
         if tool == "send_email":
             if approved is not True:
                 return self.send_json(200, {"decision": "block", "reason": "APPROVAL_REQUIRED"})
 
-        # 7. UNSAFE_OUTPUT
+        # UNSAFE_OUTPUT
         if tool == "render_html":
             html_str = args.get("html", "")
             if re.search(r"<\s*script\b", html_str, re.I) or re.search(r"<\s*iframe\b", html_str, re.I):
@@ -208,7 +208,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         ASSIGNED_ENV = "prod-pjnpuy"
         REQUIRED_LABELS = {"owner": "student-xdjns", "environment": "production", "cost_center": "cc-m71a"}
 
-        # 1. INVALID_PLAN
+        # 1. INVALID_PLAN - Strict schema check on top-level and nested value types
         if not isinstance(data, dict):
             return self.send_json(200, {"decision": "reject", "reason": "INVALID_PLAN"})
 
@@ -218,11 +218,27 @@ class RequestHandler(BaseHTTPRequestHandler):
         destroy_appr = data.get("destroyApproved")
         res = data.get("resource")
 
-        if not isinstance(env, str) or not isinstance(state, dict) or not isinstance(provider_ver, str) or not isinstance(destroy_appr, bool) or not isinstance(res, dict):
+        if not isinstance(env, str) or not isinstance(state, dict) or not isinstance(provider_ver, str) or type(destroy_appr) is not bool or not isinstance(res, dict):
             return self.send_json(200, {"decision": "reject", "reason": "INVALID_PLAN"})
 
+        # Nested state object types
+        state_backend = state.get("backend")
+        state_locked = state.get("locked")
+        if not isinstance(state_backend, str) or type(state_locked) is not bool:
+            return self.send_json(200, {"decision": "reject", "reason": "INVALID_PLAN"})
+
+        # Nested resource object types
+        address = res.get("address")
+        res_type = res.get("type")
+        action = res.get("action")
         labels = res.get("labels")
-        if not isinstance(labels, dict):
+        secret = res.get("secret")
+        force_destroy = res.get("forceDestroy")
+
+        if not isinstance(address, str) or not isinstance(res_type, str) or action not in ("create", "update", "delete") or not isinstance(labels, dict) or type(force_destroy) is not bool:
+            return self.send_json(200, {"decision": "reject", "reason": "INVALID_PLAN"})
+
+        if secret is not None and not isinstance(secret, str):
             return self.send_json(200, {"decision": "reject", "reason": "INVALID_PLAN"})
 
         # 2. ENVIRONMENT_MISMATCH
@@ -230,9 +246,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             return self.send_json(200, {"decision": "reject", "reason": "ENVIRONMENT_MISMATCH"})
 
         # 3. STATE_UNSAFE
-        backend = state.get("backend")
-        locked = state.get("locked")
-        if backend not in ("gcs", "s3", "azurerm", "remote") or locked is not True:
+        if state_backend not in ("gcs", "s3", "azurerm", "remote") or state_locked is not True:
             return self.send_json(200, {"decision": "reject", "reason": "STATE_UNSAFE"})
 
         # 4. UNPINNED_PROVIDER
@@ -248,20 +262,16 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return self.send_json(200, {"decision": "reject", "reason": "MISSING_LABELS"})
 
         # 6. PLAINTEXT_SECRET
-        secret = res.get("secret")
         if secret is not None:
-            if not isinstance(secret, str) or not secret.startswith("secret://") or len(secret) <= 9:
+            if not secret.startswith("secret://") or len(secret) <= 9:
                 return self.send_json(200, {"decision": "reject", "reason": "PLAINTEXT_SECRET"})
 
         # 7. DELETE_NOT_APPROVED
-        act = res.get("action")
-        res_type = res.get("type")
-        if act == "delete" and res_type in ("storage_bucket", "sql_database", "persistent_disk"):
+        if action == "delete" and res_type in ("storage_bucket", "sql_database", "persistent_disk"):
             if destroy_appr is not True:
                 return self.send_json(200, {"decision": "reject", "reason": "DELETE_NOT_APPROVED"})
 
         # 8. FORCE_DESTROY
-        force_destroy = res.get("forceDestroy")
         if res_type in ("storage_bucket", "google_storage_bucket") and force_destroy is True:
             return self.send_json(200, {"decision": "reject", "reason": "FORCE_DESTROY"})
 
@@ -281,21 +291,17 @@ class RequestHandler(BaseHTTPRequestHandler):
         if channel not in ("html", "markdown", "url", "sql", "shell") or not isinstance(output, str) or len(output) > 20000:
             return self.send_json(200, {"safe": False, "reason": "INVALID_SCHEMA"})
 
-        # Helper to run channel rules
         def test_channel_rules(text_str, chan):
-            # Check SCRIPT_TAG
             if chan == "html":
                 if re.search(r"<\s*(script|iframe|object|embed)\b", text_str, re.I):
                     return "SCRIPT_TAG"
                 if re.search(r"\bon[a-zA-Z]+\s*=", text_str, re.I):
                     return "EVENT_HANDLER"
 
-            # Check DANGEROUS_SCHEME
             if chan in ("html", "markdown", "url"):
                 if re.search(r"(javascript|data|vbscript)\s*:", text_str, re.I):
                     return "DANGEROUS_SCHEME"
 
-                # Extract URLs
                 urls_to_check = []
                 if chan == "html":
                     for m in re.finditer(r'(?:src|href)\s*=\s*["\']?([^"\'\s>]+)', text_str, re.I):
@@ -339,7 +345,6 @@ class RequestHandler(BaseHTTPRequestHandler):
         decoded = output
         decoded = urllib.parse.unquote(decoded)
         decoded = html.unescape(decoded)
-        # Unicode escape
         try:
             decoded = re.sub(r'\\u([0-9a-fa-f]{4})', lambda m: chr(int(m.group(1), 16)), decoded)
         except Exception:
@@ -359,7 +364,6 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     # --- Q5: OSINT Corroboration Engine ---
     def handle_corroborate(self, data):
-        # 1. invalid / low / []
         if not isinstance(data, dict):
             return self.send_json(200, {"verdict": "invalid", "confidence": "low", "corroboratingSources": []})
 
@@ -377,7 +381,6 @@ class RequestHandler(BaseHTTPRequestHandler):
         if as_of is None or not isinstance(staleness_days, (int, float)) or not isinstance(sources_list, list):
             return self.send_json(200, {"verdict": "invalid", "confidence": "low", "corroboratingSources": []})
 
-        # Filter valid sources
         valid_types = ("dns", "ct_log", "registry", "archive", "scan")
         valid_sources = []
         for s in sources_list:
@@ -394,14 +397,12 @@ class RequestHandler(BaseHTTPRequestHandler):
                         s_copy["_obs_dt"] = obs_dt
                         valid_sources.append(s_copy)
 
-        # Fresh sources: asOf - observedAt <= stalenessDays
         fresh_sources = []
         for s in valid_sources:
             diff_days = (as_of - s["_obs_dt"]).total_seconds() / 86400.0
             if 0 <= diff_days <= staleness_days:
                 fresh_sources.append(s)
 
-        # 2. Contradicted check
         contradicting_ids = []
         for s in fresh_sources:
             if s.get("authoritative") is True and s.get("value") != claim_val:
@@ -415,10 +416,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 "corroboratingSources": contradicting_ids
             })
 
-        # 3. Supported check
         matching_fresh = [s for s in fresh_sources if s.get("value") == claim_val]
         
-        # Group by origin and pick representative (lexicographically smallest id)
         by_origin = {}
         for s in matching_fresh:
             orig = s["origin"]
@@ -436,7 +435,6 @@ class RequestHandler(BaseHTTPRequestHandler):
                 "corroboratingSources": rep_ids
             })
 
-        # 4. Unverified fallback
         return self.send_json(200, {
             "verdict": "unverified",
             "confidence": "low",
