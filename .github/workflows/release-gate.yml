@@ -1,8 +1,9 @@
 name: TDS GA7 Release Gate
 
-on:
+'on':
   push:
-    branches: [main]
+    branches:
+      - main
 
 jobs:
   test-release-gate:
@@ -11,8 +12,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: "TDS identity: 23f1000944@ds.study.iitm.ac.in"
-        run: echo "Identity verified: 23f1000944@ds.study.iitm.ac.in"
+      - name: 'TDS identity: 23f1000944@ds.study.iitm.ac.in'
+        run: echo "Identity verified"
 
       - name: Set up Python
         uses: actions/setup-python@v5
