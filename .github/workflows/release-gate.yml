@@ -8,11 +8,11 @@ jobs:
   test-release-gate:
     runs-on: ubuntu-latest
     steps:
-      - name: TDS identity: 23f1000944@ds.study.iitm.ac.in
-        run: echo "Identity verified: 23f1000944@ds.study.iitm.ac.in"
-
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: TDS identity: 23f1000944@ds.study.iitm.ac.in
+        run: echo "Identity verified: 23f1000944@ds.study.iitm.ac.in"
 
       - name: Set up Python
         uses: actions/setup-python@v5
