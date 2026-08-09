@@ -5,7 +5,8 @@ import subprocess
 import os
 
 # Start server in background
-proc = subprocess.Popen(["python3", "WEEK-7/server.py"])
+server_path = "server.py" if os.path.exists("server.py") else "WEEK-7/server.py"
+proc = subprocess.Popen(["python3", server_path])
 time.sleep(1)
 
 def post_json(url, obj):
